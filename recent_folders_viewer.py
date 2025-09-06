@@ -167,8 +167,9 @@ class RecentFoldersViewer:
         self.tree.bind('<<TreeviewSelect>>', self.on_folder_select)  # 绑定选择事件
         self.tree.bind('<Button-3>', self.show_context_menu)  # 绑定右键菜单
         
-        # 绑定文件列表双击事件
+        # 绑定文件列表双击事件和回车键事件
         self.file_tree.bind('<Double-1>', self.on_file_double_click)
+        self.file_tree.bind('<Return>', self.on_file_enter_key)  # 绑定回车键
         
         # 为搜索框绑定键盘导航
         self.search_entry.bind('<Down>', self.focus_to_tree)
@@ -481,6 +482,29 @@ class RecentFoldersViewer:
         
         # 刷新显示
         self.apply_filter()
+        
+        # 重新选中移动到顶端的文件夹（不设置焦点，让调用者决定）
+        self.select_folder_by_path(path, set_focus=False)
+    
+    def select_folder_by_path(self, path, set_focus=False):
+        """根据路径选中文件夹"""
+        # 遍历树视图中的所有项目，找到匹配的路径并选中
+        for item in self.tree.get_children():
+            item_path = self.tree.item(item, 'values')[0]
+            if item_path == path:
+                # 清除当前选择
+                self.tree.selection_remove(self.tree.selection())
+                # 选中目标项目
+                self.tree.selection_set(item)
+                self.tree.focus(item)
+                # 确保项目可见（滚动到视图中）
+                self.tree.see(item)
+                
+                # 如果需要设置焦点，将焦点转移到左侧列表
+                if set_focus:
+                    self.tree.focus_set()
+                    self.current_panel = 'left'
+                break
     
     def focus_to_tree(self, event):
         """从搜索框焦点转到列表"""
@@ -987,6 +1011,15 @@ class RecentFoldersViewer:
     
     def on_file_double_click(self, event):
         """文件列表双击事件：打开文件或文件夹"""
+        self.open_selected_file()
+    
+    def on_file_enter_key(self, event):
+        """文件列表回车键事件：打开文件或文件夹"""
+        self.open_selected_file()
+        return 'break'  # 阻止默认行为
+    
+    def open_selected_file(self):
+        """打开选中的文件或文件夹"""
         selected_items = self.file_tree.selection()
         if not selected_items:
             return
@@ -1024,6 +1057,10 @@ class RecentFoldersViewer:
                 
                 # 将该文件夹移到最前面
                 self.move_folder_to_top(folder_path)
+                
+                # 手动将焦点转移到左侧（因为move_folder_to_top已经选中了文件夹）
+                self.tree.focus_set()
+                self.current_panel = 'left'
                 
                 # 已移除状态栏显示功能
             else:
