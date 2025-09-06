@@ -458,9 +458,31 @@ class RecentFoldersViewer:
             # 已移除状态栏相关功能
             return
         
-        # 分批添加文件夹到列表
-        batch_size = 20  # 每批20个文件夹
-        self.add_folders_batch(folders_data, 0, batch_size)
+        # 立即显示前10个最重要的文件夹（通常是用户最关心的）
+        priority_count = min(10, len(folders_data))
+        for i in range(priority_count):
+            folder = folders_data[i]
+            if folder['path'] in self.opened_folders:
+                tags = ("opened_exists",) if folder['exists'] else ("opened_not_exists",)
+            else:
+                tags = ("exists",) if folder['exists'] else ("not_exists",)
+            
+            comment = self.folder_comments.get(folder['path'], "")
+            self.tree.insert('', 'end', values=(folder['path'], comment), tags=tags)
+        
+        # 配置标签样式
+        self.tree.tag_configure("exists", foreground="black")
+        self.tree.tag_configure("not_exists", foreground="gray")
+        self.tree.tag_configure("opened_exists", foreground="#4A90E2")
+        self.tree.tag_configure("opened_not_exists", foreground="#6BA3F0")
+        
+        # 如果还有更多数据，继续分批添加剩余的
+        if len(folders_data) > priority_count:
+            batch_size = 20  # 每批20个文件夹
+            self.add_folders_batch(folders_data, priority_count, batch_size)
+        else:
+            # 如果数据不多，直接完成
+            self.filtered_data = folders_data.copy()
     
     def add_folders_batch(self, folders_data, start_idx, batch_size):
         """分批添加文件夹到列表"""
@@ -626,11 +648,8 @@ class RecentFoldersViewer:
                 folder['access_time'] = datetime.now()
                 break
         
-        # 重新排序：已打开的文件夹优先，然后按访问时间排序
-        self.folders_data.sort(key=lambda x: (
-            x['path'] not in self.opened_folders,  # 已打开的文件夹在前（False < True）
-            -x['access_time'].timestamp()  # 时间倒序
-        ))
+        # 重新排序：使用与初始排序相同的优先级算法
+        self.folders_data = self.sort_folders_by_priority(self.folders_data)
         
         # 刷新显示
         self.apply_filter()
@@ -1323,8 +1342,11 @@ class RecentFoldersViewer:
     
     def sort_folders_by_priority(self, folders_data):
         """根据优先级排序文件夹列表"""
-        # 为每个文件夹计算优先级分数并排序
-        folders_data.sort(key=self.get_folder_priority_score, reverse=True)
+        # 使用简单的排序逻辑：已打开的文件夹优先，然后按访问时间排序
+        folders_data.sort(key=lambda x: (
+            x['path'] not in self.opened_folders,  # 已打开的文件夹在前（False < True）
+            -x['access_time'].timestamp()  # 时间倒序
+        ))
         return folders_data
     
     def on_closing(self):
