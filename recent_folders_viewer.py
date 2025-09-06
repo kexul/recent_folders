@@ -40,6 +40,8 @@ class RecentFoldersViewer:
         # 记录已打开的文件夹和打开次数
         self.opened_folders = set()
         self.open_history = {}  # {path: {'count': 打开次数, 'last_opened': 最后打开时间}}
+        # 文件夹注释
+        self.folder_comments = {}  # {path: comment}
         
         # 配置文件路径
         self.config_dir = os.path.join(os.path.expanduser("~"), ".recent_folders_viewer")
@@ -107,13 +109,15 @@ class RecentFoldersViewer:
         left_frame.rowconfigure(0, weight=1)
         
         # 创建文件夹列表Treeview
-        columns = ('path',)
+        columns = ('path', 'comment')
         self.tree = ttk.Treeview(left_frame, columns=columns, show='headings', height=15)
         
         # 定义列标题和宽度
         self.tree.heading('path', text='文件夹路径')
+        self.tree.heading('comment', text='注释')
         
-        self.tree.column('path', width=500, anchor='w')
+        self.tree.column('path', width=400, anchor='w')
+        self.tree.column('comment', width=200, anchor='w')
         
         # 左侧滚动条
         left_scrollbar = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -161,6 +165,7 @@ class RecentFoldersViewer:
         self.tree.bind('<Return>', self.on_enter_key)  # 绑定回车键
         self.tree.bind('<KeyPress>', self.on_tree_key_press)  # 绑定其他按键
         self.tree.bind('<<TreeviewSelect>>', self.on_folder_select)  # 绑定选择事件
+        self.tree.bind('<Button-3>', self.show_context_menu)  # 绑定右键菜单
         
         # 绑定文件列表双击事件
         self.file_tree.bind('<Double-1>', self.on_file_double_click)
@@ -184,6 +189,14 @@ class RecentFoldersViewer:
         # 绑定窗口事件
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)  # 关闭按钮隐藏到托盘
         self.root.bind('<Unmap>', self.on_window_minimize)  # 最小化事件
+        
+        # 创建右键菜单
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="编辑注释", command=self.edit_comment)
+        self.context_menu.add_command(label="删除注释", command=self.delete_comment)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="打开文件夹", command=self.open_selected_folder)
+        self.context_menu.add_command(label="复制路径", command=self.copy_selected_path)
     
     def get_recent_folders_from_lnk_files(self):
         """从Windows Recent文件夹的.lnk文件读取最近访问的文件夹"""
@@ -406,8 +419,12 @@ class RecentFoldersViewer:
             else:
                 tags = ("exists",) if folder['exists'] else ("not_exists",)
             
+            # 获取该文件夹的注释
+            comment = self.folder_comments.get(folder['path'], "")
+            
             self.tree.insert('', 'end', values=(
                 folder['path'],
+                comment
             ), tags=tags)
         
         # 配置标签样式
@@ -423,14 +440,10 @@ class RecentFoldersViewer:
         self.apply_filter()
     
     def on_single_click(self, event):
-        """单击事件：复制路径到剪贴板"""
-        item = self.tree.selection()[0] if self.tree.selection() else None
-        if item:
-            path = self.tree.item(item, 'values')[0]
-            try:
-                pyperclip.copy(path)
-            except Exception as e:
-                messagebox.showerror("错误", f"复制到剪贴板失败: {str(e)}")
+        """单击事件：选中项目（不再复制路径）"""
+        # 保留单击选中功能，但移除自动复制路径的行为
+        # 现在用户需要通过右键菜单来复制路径
+        pass
     
     def on_double_click(self, event):
         """双击事件：在文件管理器中打开文件夹"""
@@ -1036,29 +1049,34 @@ class RecentFoldersViewer:
                 # 加载打开历史
                 self.open_history = config.get('open_history', {})
                 
+                # 加载文件夹注释
+                self.folder_comments = config.get('folder_comments', {})
+                
                 # 重建 opened_folders 集合
                 self.opened_folders = set(self.open_history.keys())
                 
-                print(f"配置加载成功，包含 {len(self.open_history)} 条历史记录")
+                print(f"配置加载成功，包含 {len(self.open_history)} 条历史记录和 {len(self.folder_comments)} 条注释")
             else:
                 print("配置文件不存在，使用默认设置")
         except Exception as e:
             print(f"加载配置文件失败: {e}")
             self.open_history = {}
             self.opened_folders = set()
+            self.folder_comments = {}
     
     def save_config(self):
         """保存配置文件"""
         try:
             config = {
                 'open_history': self.open_history,
+                'folder_comments': self.folder_comments,
                 'last_saved': time.time()
             }
             
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
                 
-            print(f"配置保存成功，包含 {len(self.open_history)} 条历史记录")
+            print(f"配置保存成功，包含 {len(self.open_history)} 条历史记录和 {len(self.folder_comments)} 条注释")
         except Exception as e:
             print(f"保存配置文件失败: {e}")
     
@@ -1178,6 +1196,170 @@ class RecentFoldersViewer:
             self.tree.focus(first_item)
         
         return 'break'  # 阻止默认行为和事件传播
+    
+    def show_context_menu(self, event):
+        """显示右键菜单"""
+        # 获取点击的项目
+        item = self.tree.identify_row(event.y)
+        if item:
+            # 选中该项目
+            self.tree.selection_set(item)
+            self.tree.focus(item)
+            
+            # 获取路径
+            path = self.tree.item(item, 'values')[0]
+            
+            # 根据是否有注释更新菜单项状态
+            if path in self.folder_comments and self.folder_comments[path]:
+                self.context_menu.entryconfig(1, state="normal")  # 删除注释菜单项
+            else:
+                self.context_menu.entryconfig(1, state="disabled")  # 禁用删除注释菜单项
+            
+            # 显示菜单
+            try:
+                self.context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.context_menu.grab_release()
+    
+    def edit_comment(self):
+        """编辑选中文件夹的注释"""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        
+        item = selected_items[0]
+        path = self.tree.item(item, 'values')[0]
+        
+        # 获取当前注释
+        current_comment = self.folder_comments.get(path, "")
+        
+        # 创建编辑对话框
+        self.show_comment_dialog(path, current_comment)
+    
+    def show_comment_dialog(self, path, current_comment):
+        """显示注释编辑对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("编辑文件夹注释")
+        dialog.geometry("500x300")
+        dialog.resizable(True, True)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 居中显示
+        dialog.geometry("+%d+%d" % (
+            self.root.winfo_rootx() + 50,
+            self.root.winfo_rooty() + 50
+        ))
+        
+        # 主框架
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill="both", expand=True)
+        
+        # 文件夹路径标签
+        folder_name = os.path.basename(path) or path
+        ttk.Label(main_frame, text=f"文件夹: {folder_name}", font=('', 10, 'bold')).pack(anchor="w")
+        ttk.Label(main_frame, text=path, font=('', 8), foreground="gray").pack(anchor="w", pady=(0, 10))
+        
+        # 注释输入框
+        ttk.Label(main_frame, text="注释:").pack(anchor="w")
+        
+        # 创建文本框和滚动条
+        text_frame = ttk.Frame(main_frame)
+        text_frame.pack(fill="both", expand=True, pady=(5, 10))
+        
+        comment_text = tk.Text(text_frame, wrap="word", height=8)
+        scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=comment_text.yview)
+        comment_text.configure(yscrollcommand=scrollbar.set)
+        
+        comment_text.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # 设置当前注释内容
+        comment_text.insert("1.0", current_comment)
+        comment_text.focus_set()
+        
+        # 按钮框架
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill="x")
+        
+        def save_comment():
+            """保存注释"""
+            new_comment = comment_text.get("1.0", "end-1c").strip()
+            if new_comment:
+                self.folder_comments[path] = new_comment
+            else:
+                # 如果注释为空，删除该注释
+                if path in self.folder_comments:
+                    del self.folder_comments[path]
+            
+            # 保存配置
+            self.save_config()
+            
+            # 刷新显示
+            self.update_folder_display()
+            
+            dialog.destroy()
+        
+        def cancel_edit():
+            """取消编辑"""
+            dialog.destroy()
+        
+        # 保存和取消按钮
+        ttk.Button(button_frame, text="保存", command=save_comment).pack(side="right", padx=(5, 0))
+        ttk.Button(button_frame, text="取消", command=cancel_edit).pack(side="right")
+        
+        # 绑定快捷键
+        dialog.bind('<Control-Return>', lambda e: save_comment())
+        dialog.bind('<Escape>', lambda e: cancel_edit())
+        
+        # 选中所有文本便于编辑
+        comment_text.select_range("1.0", "end")
+    
+    def delete_comment(self):
+        """删除选中文件夹的注释"""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        
+        item = selected_items[0]
+        path = self.tree.item(item, 'values')[0]
+        
+        if path in self.folder_comments:
+            if messagebox.askyesno("确认删除", "确定要删除这个文件夹的注释吗？"):
+                del self.folder_comments[path]
+                self.save_config()
+                self.update_folder_display()
+    
+    def open_selected_folder(self):
+        """打开选中的文件夹"""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        
+        # 复用双击事件的逻辑
+        fake_event = type('Event', (), {})()
+        self.on_double_click(fake_event)
+    
+    def copy_selected_path(self):
+        """复制选中文件夹的路径"""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        
+        item = selected_items[0]
+        path = self.tree.item(item, 'values')[0]
+        try:
+            pyperclip.copy(path)
+            # 可以添加一个简短的提示
+            self.root.title("Windows 最近访问文件夹查看器 - 路径已复制")
+            self.root.after(2000, lambda: self.root.title("Windows 最近访问文件夹查看器"))
+        except Exception as e:
+            messagebox.showerror("错误", f"复制到剪贴板失败: {str(e)}")
+    
+    def update_folder_display(self):
+        """更新文件夹显示（用于在编辑注释后刷新显示）"""
+        # 重新应用过滤器以更新显示
+        self.apply_filter()
 
 
 def main():
