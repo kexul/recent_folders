@@ -1153,7 +1153,7 @@ class RecentFoldersViewer:
             ), tags=("info",))
         
         # 配置标签样式
-        self.file_tree.tag_configure("folder", foreground="#D4A017")  # 文件夹用淡黄色
+        self.file_tree.tag_configure("folder", foreground="black")    # 文件夹用黑色
         self.file_tree.tag_configure("file", foreground="black")      # 文件用黑色
         self.file_tree.tag_configure("info", foreground="#888888", font=('', 9, 'italic'))  # 提示信息用灰色斜体
         
