@@ -371,7 +371,13 @@ class RecentFoldersViewer:
             else:
                 tags = ("exists",) if folder['exists'] else ("not_exists",)
             
-            self.tree.insert('', 'end', values=(folder['path'],), tags=tags)
+            # 获取该文件夹的注释
+            comment = self.folder_comments.get(folder['path'], "")
+            
+            self.tree.insert('', 'end', values=(
+                folder['path'],
+                comment
+            ), tags=tags)
         
         # 配置标签样式
         self.tree.tag_configure("exists", foreground="black")
@@ -1350,7 +1356,8 @@ class RecentFoldersViewer:
         dialog.bind('<Escape>', lambda e: cancel_edit())
         
         # 选中所有文本便于编辑
-        comment_text.select_range("1.0", "end")
+        comment_text.tag_add("sel", "1.0", "end")
+        comment_text.mark_set("insert", "end")
     
     def delete_comment(self):
         """删除选中文件夹的注释"""
