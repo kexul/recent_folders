@@ -108,9 +108,10 @@ class RecentFoldersViewer:
         left_frame.columnconfigure(0, weight=1)
         left_frame.rowconfigure(0, weight=1)
         
+        
         # 创建文件夹列表Treeview
         columns = ('path', 'comment')
-        self.tree = ttk.Treeview(left_frame, columns=columns, show='headings', height=15)
+        self.tree = ttk.Treeview(left_frame, columns=columns, show='headings', height=15, style='Treeview')
         
         # 定义列标题和宽度
         self.tree.heading('path', text='文件夹路径')
@@ -200,7 +201,7 @@ class RecentFoldersViewer:
         self.context_menu.add_command(label="复制路径", command=self.copy_selected_path)
     
     def get_recent_folders_from_lnk_files(self):
-        """从Windows Recent文件夹的.lnk文件读取最近访问的文件夹"""
+        """从Windows Recent文件夹的.lnk文件读取最近访问的文件夹 - 优化版本"""
         folders = []
         
         try:
@@ -213,45 +214,110 @@ class RecentFoldersViewer:
             if not os.path.exists(recent_path):
                 return folders
             
-            # 创建Shell对象来解析快捷方式
+            # 使用os.scandir提升性能，同时获取文件信息
+            lnk_files_info = []
+            try:
+                with os.scandir(recent_path) as entries:
+                    for entry in entries:
+                        if entry.name.lower().endswith('.lnk') and entry.is_file():
+                            try:
+                                stat_info = entry.stat()
+                                lnk_files_info.append({
+                                    'path': entry.path,
+                                    'mtime': stat_info.st_mtime
+                                })
+                            except (OSError, PermissionError):
+                                continue
+            except (OSError, PermissionError):
+                return folders
+            
+            if not lnk_files_info:
+                return folders
+            
+            # 按修改时间排序，优先处理最新的文件
+            lnk_files_info.sort(key=lambda x: x['mtime'], reverse=True)
+            
+            # 创建一个Shell对象（复用，避免重复创建）
             shell = win32com.client.Dispatch("WScript.Shell")
             
-            # 获取所有.lnk文件
-            lnk_files = glob.glob(os.path.join(recent_path, '*.lnk'))
+            # 用于去重的集合
+            seen_paths = set()
+            folder_candidates = []
             
-            for lnk_file in lnk_files:
-                try:
-                    # 解析快捷方式
-                    shortcut = shell.CreateShortCut(lnk_file)
-                    target_path = shortcut.Targetpath
+            # 分批处理，减少内存压力
+            batch_size = 100  # 一次处理100个文件
+            for i in range(0, len(lnk_files_info), batch_size):
+                batch = lnk_files_info[i:i + batch_size]
+                
+                for lnk_info in batch:
+                    lnk_file = lnk_info['path']
+                    mtime = lnk_info['mtime']
                     
-                    # 检查目标是否是文件夹
-                    if target_path and os.path.exists(target_path) and os.path.isdir(target_path):
-                        # 获取文件的修改时间作为访问时间
-                        file_stat = os.stat(lnk_file)
-                        access_time = datetime.fromtimestamp(file_stat.st_mtime)
+                    try:
+                        # 解析快捷方式
+                        shortcut = shell.CreateShortCut(lnk_file)
+                        target_path = shortcut.Targetpath
                         
-                        folders.append({
-                            'path': target_path,
-                            'access_time': access_time,
-                            'exists': True
-                        })
-                    elif target_path:
-                        # 如果目标是文件，获取其父目录
-                        parent_dir = os.path.dirname(target_path)
-                        if parent_dir and os.path.exists(parent_dir) and os.path.isdir(parent_dir):
-                            file_stat = os.stat(lnk_file)
-                            access_time = datetime.fromtimestamp(file_stat.st_mtime)
-                            
-                            folders.append({
-                                'path': parent_dir,
+                        if not target_path:
+                            continue
+                        
+                        # 规范化路径用于去重
+                        normalized_target = os.path.normpath(target_path).lower()
+                        
+                        # 收集候选路径（延迟文件系统检查）
+                        access_time = datetime.fromtimestamp(mtime)
+                        
+                        # 如果目标路径本身可能是文件夹
+                        if normalized_target not in seen_paths:
+                            seen_paths.add(normalized_target)
+                            folder_candidates.append({
+                                'path': target_path,
                                 'access_time': access_time,
+                                'is_direct': True
+                            })
+                        
+                        # 如果目标是文件，添加父目录
+                        parent_dir = os.path.dirname(target_path)
+                        if parent_dir:
+                            normalized_parent = os.path.normpath(parent_dir).lower()
+                            if normalized_parent not in seen_paths:
+                                seen_paths.add(normalized_parent)
+                                folder_candidates.append({
+                                    'path': parent_dir,
+                                    'access_time': access_time,
+                                    'is_direct': False
+                                })
+                                
+                    except Exception as e:
+                        # 跳过无法解析的快捷方式
+                        continue
+            
+            # 现在批量检查文件夹是否存在（这是最耗时的部分）
+            print(f"正在验证 {len(folder_candidates)} 个候选文件夹...")
+            
+            # 分批验证存在性，避免UI卡顿
+            verified_batch_size = 50
+            for i in range(0, len(folder_candidates), verified_batch_size):
+                batch = folder_candidates[i:i + verified_batch_size]
+                
+                for candidate in batch:
+                    try:
+                        # 使用更快的路径检查方法
+                        if os.path.isdir(candidate['path']):
+                            folders.append({
+                                'path': candidate['path'],
+                                'access_time': candidate['access_time'],
                                 'exists': True
                             })
-                            
-                except Exception as e:
-                    # 跳过无法解析的快捷方式
-                    continue
+                    except (OSError, PermissionError):
+                        # 跳过无法访问的路径
+                        continue
+                
+                # 每批处理后给其他线程一点时间
+                if i + verified_batch_size < len(folder_candidates):
+                    time.sleep(0.001)  # 1ms
+            
+            print(f"找到 {len(folders)} 个有效文件夹")
             
         except Exception as e:
             print(f"读取Recent文件夹时出错: {e}")
@@ -453,24 +519,66 @@ class RecentFoldersViewer:
         pass
     
     def on_double_click(self, event):
-        """双击事件：在文件管理器中打开文件夹"""
-        item = self.tree.selection()[0] if self.tree.selection() else None
-        if item:
-            path = self.tree.item(item, 'values')[0]
-            try:
-                if os.path.exists(path):
-                    # 在文件管理器中打开（移除check=True避免误报错误）
-                    subprocess.run(['explorer', path])
-                    
-                    # 记录文件夹打开历史
-                    self.record_folder_open(path)
-                    
-                    # 将该文件夹移到最前面并更新访问时间
-                    self.move_folder_to_top(path)
-                else:
-                    messagebox.showwarning("警告", f"文件夹不存在: {path}")
-            except Exception as e:
-                messagebox.showerror("错误", f"打开文件夹失败: {str(e)}")
+        """双击事件：根据点击位置决定是打开文件夹还是编辑注释"""
+        # 首先确定点击的项目
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        
+        # 选中该项目（如果还没选中）
+        self.tree.selection_set(item)
+        self.tree.focus(item)
+        
+        # 获取点击的列和区域
+        column = self.tree.identify_column(event.x)
+        region = self.tree.identify_region(event.x, event.y)
+        
+        # 获取文件夹路径
+        values = self.tree.item(item, 'values')
+        if not values:
+            return
+        
+        path = values[0]
+        
+        # 确保只在cell区域响应双击
+        if region != 'cell':
+            return
+        
+        # 根据列决定操作
+        if column == '#1':  # 点击的是路径列（文件夹名字区域）
+            # 打开文件夹
+            self.open_folder_by_path(path)
+        elif column == '#2':  # 点击的是注释列
+            # 编辑注释
+            self.edit_comment_by_path(path)
+        else:
+            # 如果点击的是其他区域，默认打开文件夹
+            self.open_folder_by_path(path)
+    
+    def open_folder_by_path(self, path):
+        """根据路径打开文件夹"""
+        try:
+            if os.path.exists(path):
+                # 在文件管理器中打开（移除check=True避免误报错误）
+                subprocess.run(['explorer', path])
+                
+                # 记录文件夹打开历史
+                self.record_folder_open(path)
+                
+                # 将该文件夹移到最前面并更新访问时间
+                self.move_folder_to_top(path)
+            else:
+                messagebox.showwarning("警告", f"文件夹不存在: {path}")
+        except Exception as e:
+            messagebox.showerror("错误", f"打开文件夹失败: {str(e)}")
+    
+    def edit_comment_by_path(self, path):
+        """根据路径编辑注释"""
+        # 获取当前注释
+        current_comment = self.folder_comments.get(path, "")
+        
+        # 创建编辑对话框
+        self.show_comment_dialog(path, current_comment)
     
     def move_folder_to_top(self, path):
         """将指定文件夹移到列表最前面"""
