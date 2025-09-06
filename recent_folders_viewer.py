@@ -184,19 +184,6 @@ class RecentFoldersViewer:
         # 绑定窗口事件
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)  # 关闭按钮隐藏到托盘
         self.root.bind('<Unmap>', self.on_window_minimize)  # 最小化事件
-        
-        # 状态栏
-        self.status_var = tk.StringVar()
-        self.status_var.set("就绪")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
-        
-        # 说明标签
-        info_label = ttk.Label(main_frame, 
-                              text="使用说明：单击复制路径到剪贴板，双击打开文件夹", 
-                              font=('', 9), 
-                              foreground='gray')
-        info_label.grid(row=3, column=0, pady=(5, 0))
     
     def get_recent_folders_from_lnk_files(self):
         """从Windows Recent文件夹的.lnk文件读取最近访问的文件夹"""
@@ -257,153 +244,10 @@ class RecentFoldersViewer:
         
         return folders
     
-    def get_recent_folders_from_registry(self):
-        """从Windows注册表读取最近访问的文件夹"""
-        folders = []
-        
-        # 尝试多个注册表位置
-        registry_paths = [
-            # Windows 10/11 最近访问的文件夹
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs\.lnk"),
-            # 文件夹访问历史
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU"),
-            # 另一个可能的位置
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU"),
-        ]
-        
-        for hkey, subkey in registry_paths:
-            try:
-                with winreg.OpenKey(hkey, subkey) as key:
-                    i = 0
-                    while True:
-                        try:
-                            value_name, value_data, value_type = winreg.EnumValue(key, i)
-                            if isinstance(value_data, str) and os.path.exists(value_data):
-                                if os.path.isdir(value_data):
-                                    folders.append(value_data)
-                            i += 1
-                        except WindowsError:
-                            break
-            except FileNotFoundError:
-                continue
-            except PermissionError:
-                continue
-        
-        return folders
-    
-    def get_recent_folders_from_shell_bags(self):
-        """从ShellBags读取文件夹访问信息"""
-        folders = []
-        
-        try:
-            # Windows ShellBags 位置
-            shellbags_path = r"Software\Microsoft\Windows\Shell\BagMRU"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, shellbags_path) as key:
-                i = 0
-                while True:
-                    try:
-                        subkey_name = winreg.EnumKey(key, i)
-                        # 这里可以进一步解析ShellBags数据
-                        i += 1
-                    except WindowsError:
-                        break
-        except:
-            pass
-        
-        return folders
-    
-    def get_recent_folders_from_jumplist(self):
-        """从跳转列表获取最近文件夹"""
-        folders = []
-        
-        # Windows 10/11 跳转列表位置
-        appdata = os.environ.get('APPDATA')
-        if appdata:
-            jumplist_path = os.path.join(appdata, 'Microsoft', 'Windows', 'Recent', 'AutomaticDestinations')
-            if os.path.exists(jumplist_path):
-                # 这里可以解析跳转列表文件，但比较复杂，暂时跳过
-                pass
-        
-        return folders
-    
-    def get_recent_folders_from_quick_access(self):
-        """从快速访问获取最近文件夹"""
-        folders = set()
-        
-        try:
-            # 快速访问注册表位置
-            quick_access_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\{679f85cb-0220-4080-b29b-5540cc05aab6}"
-            
-            # 另一个可能的位置：用户频繁访问的文件夹
-            freq_folders_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU"
-            
-            try:
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, freq_folders_path) as key:
-                    i = 0
-                    while True:
-                        try:
-                            value_name, value_data, value_type = winreg.EnumValue(key, i)
-                            # 解析二进制数据中的路径信息
-                            if value_type == winreg.REG_BINARY and len(value_data) > 20:
-                                # 尝试从二进制数据中提取路径
-                                try:
-                                    # 查找可能的路径字符串
-                                    data_str = value_data.decode('utf-16le', errors='ignore')
-                                    # 使用正则表达式查找路径
-                                    path_pattern = r'[A-Za-z]:\\[^\\/:*?"<>|]*(?:\\[^\\/:*?"<>|]*)*'
-                                    paths = re.findall(path_pattern, data_str)
-                                    for path in paths:
-                                        if os.path.exists(path) and os.path.isdir(path):
-                                            folders.add(path)
-                                except:
-                                    pass
-                            i += 1
-                        except WindowsError:
-                            break
-            except:
-                pass
-            
-        except:
-            pass
-        
-        return list(folders)
-    
-    def get_common_folders(self):
-        """获取常用系统文件夹"""
-        common_folders = []
-        
-        # 添加一些常用的系统文件夹
-        user_profile = os.environ.get('USERPROFILE', '')
-        if user_profile:
-            common_paths = [
-                os.path.join(user_profile, 'Desktop'),
-                os.path.join(user_profile, 'Documents'),
-                os.path.join(user_profile, 'Downloads'),
-                os.path.join(user_profile, 'Pictures'),
-                os.path.join(user_profile, 'Music'),
-                os.path.join(user_profile, 'Videos'),
-                user_profile,
-            ]
-            
-            for path in common_paths:
-                if os.path.exists(path):
-                    common_folders.append(path)
-        
-        # 添加驱动器根目录
-        import string
-        for letter in string.ascii_uppercase:
-            drive = f"{letter}:\\"
-            if os.path.exists(drive):
-                common_folders.append(drive)
-        
-        return common_folders
-    
     def load_recent_folders(self):
         """加载最近访问的文件夹"""
         def load_in_thread():
-            # 保存原始状态并显示加载提示
-            if not hasattr(self, '_loading_folders_original_status'):
-                self._loading_folders_original_status = self.status_var.get()
+            # 显示加载提示
             self.root.after(0, self.show_folders_loading)
             
             # 使用字典来存储文件夹信息，以路径为键进行去重
@@ -459,10 +303,6 @@ class RecentFoldersViewer:
         
         # 配置加载样式
         self.tree.tag_configure("loading", foreground="#4A90E2", font=('', 9, 'italic'))
-        
-        # 更新状态
-        original_status = getattr(self, '_loading_folders_original_status', "就绪")
-        self.status_var.set("正在加载最近访问的文件夹...")
     
     def update_folders_loading_progress(self, progress, found_count):
         """更新文件夹加载进度"""
@@ -482,13 +322,7 @@ class RecentFoldersViewer:
         self.tree.insert('', 'end', values=(f"加载失败: {error_msg}",), tags=("error",))
         self.tree.tag_configure("error", foreground="red")
         
-        # 恢复原始状态
-        original_status = getattr(self, '_loading_folders_original_status', "就绪")
-        self.status_var.set(original_status)
-        
-        # 清理保存的原始状态
-        if hasattr(self, '_loading_folders_original_status'):
-            delattr(self, '_loading_folders_original_status')
+        # 已移除状态栏相关功能
     
     def update_folder_list_batched(self, folders_data):
         """分批更新文件夹列表，避免UI卡顿"""
@@ -503,13 +337,7 @@ class RecentFoldersViewer:
             self.tree.insert('', 'end', values=("未找到最近访问的文件夹",), tags=("empty",))
             self.tree.tag_configure("empty", foreground="#888888", font=('', 10, 'italic'))
             
-            # 恢复状态
-            original_status = getattr(self, '_loading_folders_original_status', "就绪")
-            self.status_var.set(original_status)
-            
-            # 清理保存的原始状态
-            if hasattr(self, '_loading_folders_original_status'):
-                delattr(self, '_loading_folders_original_status')
+            # 已移除状态栏相关功能
             return
         
         # 分批添加文件夹到列表
@@ -543,26 +371,13 @@ class RecentFoldersViewer:
         
         # 如果还有更多数据，继续处理下一批
         if end_idx < len(folders_data):
-            # 更新状态显示进度
-            original_status = getattr(self, '_loading_folders_original_status', "就绪")
-            self.status_var.set(f"正在显示文件夹列表... {progress}% ({loaded_count}/{len(folders_data)})")
-            
             # 调度下一批（给UI一些时间响应）
             self.root.after(20, lambda: self.add_folders_batch(folders_data, end_idx, batch_size))
         else:
             # 所有批次完成，应用过滤器并恢复状态
             self.filtered_data = folders_data.copy()
             
-            # 恢复原始状态并显示最终信息
-            original_status = getattr(self, '_loading_folders_original_status', "就绪")
-            self.status_var.set(f"{original_status} | 已加载 {len(folders_data)} 个文件夹")
-            
-            # 3秒后完全恢复原始状态
-            self.root.after(3000, lambda: self.status_var.set(original_status))
-            
-            # 清理保存的原始状态
-            if hasattr(self, '_loading_folders_original_status'):
-                delattr(self, '_loading_folders_original_status')
+            # 已移除状态栏相关功能
     
     
     def apply_filter(self):
@@ -601,11 +416,7 @@ class RecentFoldersViewer:
         self.tree.tag_configure("opened_exists", foreground="#4A90E2")  # 淡蓝色
         self.tree.tag_configure("opened_not_exists", foreground="#6BA3F0")  # 稍亮的淡蓝色
         
-        # 更新状态
-        if search_text:
-            self.status_var.set(f"搜索 '{search_text}': 找到 {len(self.filtered_data)} 个匹配项")
-        else:
-            self.status_var.set(f"显示 {len(self.filtered_data)} 个文件夹")
+        # 更新状态已移除
     
     def on_search_change(self, *args):
         """搜索文本变化时的回调"""
@@ -618,7 +429,6 @@ class RecentFoldersViewer:
             path = self.tree.item(item, 'values')[0]
             try:
                 pyperclip.copy(path)
-                self.status_var.set(f"已复制路径: {path}")
             except Exception as e:
                 messagebox.showerror("错误", f"复制到剪贴板失败: {str(e)}")
     
@@ -637,8 +447,6 @@ class RecentFoldersViewer:
                     
                     # 将该文件夹移到最前面并更新访问时间
                     self.move_folder_to_top(path)
-                    
-                    self.status_var.set(f"已打开文件夹: {path}")
                 else:
                     messagebox.showwarning("警告", f"文件夹不存在: {path}")
             except Exception as e:
@@ -1091,10 +899,7 @@ class RecentFoldersViewer:
         # 配置加载样式
         self.file_tree.tag_configure("loading", foreground="#4A90E2", font=('', 9, 'italic'))
         
-        # 保存原始状态并更新
-        if not hasattr(self, '_loading_original_status'):
-            self._loading_original_status = self.status_var.get()
-        self.status_var.set(f"{self._loading_original_status} | 正在加载文件列表...")
+        # 已删除状态栏相关功能
     
     def update_loading_progress(self, progress):
         """更新加载进度"""
@@ -1121,16 +926,7 @@ class RecentFoldersViewer:
             # 配置空文件夹样式
             self.file_tree.tag_configure("empty", foreground="#888888", font=('', 10, 'italic'))
             
-            # 更新状态
-            original_status = getattr(self, '_loading_original_status', self.status_var.get().split(' | ')[0])
-            self.status_var.set(f"{original_status} | 空文件夹")
-            
-            # 3秒后恢复原状态
-            self.root.after(3000, lambda: self.status_var.set(original_status))
-            
-            # 清理保存的原始状态
-            if hasattr(self, '_loading_original_status'):
-                delattr(self, '_loading_original_status')
+            # 已移除状态栏相关功能
             return
         
         # 添加文件项目
@@ -1164,34 +960,7 @@ class RecentFoldersViewer:
         self.file_tree.tag_configure("file", foreground="black")      # 文件用黑色
         self.file_tree.tag_configure("info", foreground="#888888", font=('', 9, 'italic'))  # 提示信息用灰色斜体
         
-        # 更新状态
-        folder_count = sum(1 for f in files_data if f['is_dir'])
-        file_count = len(files_data) - folder_count
-        
-        if folder_count > 0 and file_count > 0:
-            status_text = f"{folder_count} 个文件夹, {file_count} 个文件"
-        elif folder_count > 0:
-            status_text = f"{folder_count} 个文件夹"
-        elif file_count > 0:
-            status_text = f"{file_count} 个文件"
-        else:
-            status_text = "空文件夹"
-        
-        # 如果有截断，在状态中显示总数
-        if is_truncated and total_items:
-            status_text += f" (总共 {total_items} 项)"
-        
-        # 临时显示文件数量信息
-        # 使用保存的原始状态
-        original_status = getattr(self, '_loading_original_status', self.status_var.get().split(' | ')[0])
-        self.status_var.set(f"{original_status} | {status_text}")
-        
-        # 3秒后恢复原状态
-        self.root.after(3000, lambda: self.status_var.set(original_status))
-        
-        # 清理保存的原始状态
-        if hasattr(self, '_loading_original_status'):
-            delattr(self, '_loading_original_status')
+        # 已移除状态栏相关功能
     
     def show_preview_error(self, error_msg):
         """显示预览错误信息"""
@@ -1243,7 +1012,7 @@ class RecentFoldersViewer:
                 # 将该文件夹移到最前面
                 self.move_folder_to_top(folder_path)
                 
-                self.status_var.set(f"已打开: {actual_name}")
+                # 已移除状态栏显示功能
             else:
                 messagebox.showwarning("警告", f"文件不存在: {actual_name}")
         except Exception as e:
