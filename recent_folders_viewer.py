@@ -42,6 +42,10 @@ class RecentFoldersViewer:
         self.open_history = {}  # {path: {'count': 打开次数, 'last_opened': 最后打开时间}}
         # 文件夹注释
         self.folder_comments = {}  # {path: comment}
+        # 自动生成的智能标签
+        self.folder_smart_tags = {}  # {path: [tag1, tag2, ...]}
+        # 文件夹分类缓存
+        self.folder_categories = {}  # {path: category}
         
         # 配置文件路径
         self.config_dir = os.path.join(os.path.expanduser("~"), ".recent_folders_viewer")
@@ -67,6 +71,9 @@ class RecentFoldersViewer:
         
         # 绑定程序关闭事件
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # 生成智能标签
+        self.generate_smart_tags()
         
     def setup_ui(self):
         """设置用户界面"""
@@ -96,6 +103,34 @@ class RecentFoldersViewer:
         # 刷新按钮
         refresh_btn = ttk.Button(search_frame, text="刷新", command=self.refresh_folders)
         refresh_btn.grid(row=0, column=2, padx=(5, 0))
+        
+        # 快捷分类过滤按钮
+        filter_frame = ttk.Frame(main_frame)
+        filter_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 10))
+        
+        ttk.Label(filter_frame, text="快捷分类:").grid(row=0, column=0, padx=(0, 5))
+        
+        # 分类按钮
+        categories = [
+            ("全部", ""),
+            ("开发", "开发"),
+            ("工作", "工作"),
+            ("学习", "学习"),
+            ("多媒体", "多媒体"),
+            ("手动备注", "手动备注"),
+            ("常用", "常用"),
+            ("今日", "今日")
+        ]
+        
+        self.category_buttons = []
+        for i, (label, category) in enumerate(categories):
+            btn = ttk.Button(filter_frame, text=label, 
+                           command=lambda c=category: self.filter_by_category(c))
+            btn.grid(row=0, column=i+1, padx=2)
+            self.category_buttons.append(btn)
+        
+        # 调整网格权重
+        main_frame.rowconfigure(2, weight=0)
         
         # 创建水平分割面板
         paned_window = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
@@ -196,6 +231,9 @@ class RecentFoldersViewer:
         self.context_menu = tk.Menu(self.root, tearoff=0)
         self.context_menu.add_command(label="编辑注释", command=self.edit_comment)
         self.context_menu.add_command(label="删除注释", command=self.delete_comment)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="自动生成注释", command=self.auto_generate_comment)
+        self.context_menu.add_command(label="重新生成所有标签", command=self.regenerate_all_smart_tags)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="打开文件夹", command=self.open_selected_folder)
         self.context_menu.add_command(label="复制路径", command=self.copy_selected_path)
@@ -1512,6 +1550,398 @@ class RecentFoldersViewer:
         """更新文件夹显示（用于在编辑注释后刷新显示）"""
         # 重新应用过滤器以更新显示
         self.apply_filter()
+    
+    def filter_by_category(self, category):
+        """根据分类过滤文件夹"""
+        # 存储当前选择的分类
+        self.current_category = category
+        
+        if category == "":
+            # 显示全部，清空搜索框
+            self.search_var.set("")
+        
+        # 应用过滤（不修改搜索框内容）
+        self.apply_category_filter(category)
+    
+    def apply_category_filter(self, category):
+        """应用分类过滤"""
+        # 清空现有项目
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # 获取搜索文本（用于额外的文本过滤）
+        search_text = self.search_var.get().lower()
+        
+        # 根据分类过滤数据
+        if category == "":
+            # 显示全部
+            if search_text:
+                self.filtered_data = [
+                    folder for folder in self.folders_data
+                    if search_text in folder['path'].lower() or 
+                       search_text in self.folder_comments.get(folder['path'], "").lower()
+                ]
+            else:
+                self.filtered_data = self.folders_data.copy()
+        else:
+            # 根据分类和注释内容过滤
+            self.filtered_data = []
+            category_lower = category.lower()
+            
+            for folder in self.folders_data:
+                path = folder['path']
+                
+                # 检查是否匹配分类
+                matches_category = False
+                
+                # 检查智能标签
+                if path in self.folder_smart_tags:
+                    tags = [tag.lower() for tag in self.folder_smart_tags[path]]
+                    if category_lower in tags:
+                        matches_category = True
+                
+                # 检查注释内容
+                comment = self.folder_comments.get(path, "").lower()
+                if category_lower in comment:
+                    matches_category = True
+                
+                # 检查路径是否包含分类关键词
+                if category_lower in path.lower():
+                    matches_category = True
+                
+                # 特殊处理一些分类
+                if category == "手动备注":
+                    # 检查是否有手动注释（不以"["开头的注释）
+                    if path in self.folder_comments:
+                        comment = self.folder_comments[path].strip()
+                        if comment and not comment.startswith('['):
+                            matches_category = True
+                            print(f"匹配手动备注: {path} -> {comment}")
+                elif category == "常用":
+                    if path in self.open_history and self.open_history[path]['count'] >= 10:
+                        matches_category = True
+                elif category == "经常":
+                    if path in self.open_history and self.open_history[path]['count'] >= 5:
+                        matches_category = True
+                elif category == "今日":
+                    access_time = folder['access_time']
+                    now = datetime.now()
+                    if (now - access_time).days == 0:
+                        matches_category = True
+                
+                # 如果匹配分类，再检查是否匹配搜索文本
+                if matches_category:
+                    if not search_text or search_text in path.lower() or search_text in comment:
+                        self.filtered_data.append(folder)
+        
+        # 添加过滤后的项目
+        for folder in self.filtered_data:
+            # 根据状态和是否已打开设置不同的标签
+            if folder['path'] in self.opened_folders:
+                tags = ("opened_exists",) if folder['exists'] else ("opened_not_exists",)
+            else:
+                tags = ("exists",) if folder['exists'] else ("not_exists",)
+            
+            # 获取该文件夹的注释
+            comment = self.folder_comments.get(folder['path'], "")
+            
+            self.tree.insert('', 'end', values=(
+                folder['path'],
+                comment
+            ), tags=tags)
+        
+        # 配置标签样式
+        self.tree.tag_configure("exists", foreground="black")
+        self.tree.tag_configure("not_exists", foreground="gray")
+        self.tree.tag_configure("opened_exists", foreground="#4A90E2")  # 淡蓝色
+        self.tree.tag_configure("opened_not_exists", foreground="#6BA3F0")  # 稍亮的淡蓝色
+    
+    def generate_smart_tags(self):
+        """生成智能标签（延迟执行）"""
+        # 延迟执行，等待文件夹数据加载完成
+        self.root.after(3000, self._generate_smart_tags_async)
+    
+    def _generate_smart_tags_async(self):
+        """在后台线程中生成智能标签"""
+        if not hasattr(self, 'folders_data') or not self.folders_data:
+            return
+        
+        def generate_in_thread():
+            try:
+                print("开始生成智能标签...")
+                processed_count = 0
+                
+                for folder in self.folders_data:
+                    path = folder['path']
+                    
+                    # 如果已经有手动注释，跳过自动生成
+                    if (path in self.folder_comments and 
+                        self.folder_comments[path].strip() and 
+                        not self.folder_comments[path].startswith('[')):
+                        continue
+                    
+                    tags = []
+                    category = "其他"
+                    
+                    try:
+                        # 基于路径分析
+                        path_lower = path.lower()
+                        
+                        # 开发相关
+                        if any(keyword in path_lower for keyword in [
+                            'project', 'code', 'dev', 'src', 'source', 'github', 'git',
+                            'programming', 'python', 'javascript', 'java', 'cpp', 'c#',
+                            'web', 'api', 'backend', 'frontend', 'nodejs', 'react', 'vue',
+                            'workspace', 'development', 'coding', 'repository', 'repo'
+                        ]):
+                            tags.append("开发")
+                            category = "开发项目"
+                        
+                        # 工作相关
+                        if any(keyword in path_lower for keyword in [
+                            'work', 'office', 'business', 'company', 'corp', 'enterprise',
+                            'meeting', 'report', 'document', 'contract', 'proposal',
+                            'presentation', 'excel', 'word', 'powerpoint'
+                        ]):
+                            tags.append("工作")
+                            if category == "其他":
+                                category = "工作文档"
+                        
+                        # 学习相关
+                        if any(keyword in path_lower for keyword in [
+                            'study', 'learn', 'course', 'tutorial', 'education', 'school',
+                            'university', 'college', 'book', 'note', 'homework',
+                            'exam', 'test', 'research', 'paper', 'thesis'
+                        ]):
+                            tags.append("学习")
+                            if category == "其他":
+                                category = "学习资料"
+                        
+                        # 多媒体相关
+                        if any(keyword in path_lower for keyword in [
+                            'photo', 'picture', 'image', 'video', 'movie', 'music', 'audio',
+                            'media', 'gallery', 'camera', 'screenshot', 'wallpaper'
+                        ]):
+                            tags.append("多媒体")
+                            if category == "其他":
+                                category = "多媒体文件"
+                        
+                        # 下载相关
+                        if any(keyword in path_lower for keyword in [
+                            'download', 'temp', 'temporary', 'cache', 'installer', 'setup'
+                        ]):
+                            tags.append("下载")
+                            if category == "其他":
+                                category = "下载临时"
+                        
+                        # 游戏相关
+                        if any(keyword in path_lower for keyword in [
+                            'game', 'steam', 'origin', 'epic', 'ubisoft', 'blizzard',
+                            'gaming', 'mod', 'save'
+                        ]):
+                            tags.append("游戏")
+                            if category == "其他":
+                                category = "游戏相关"
+                        
+                        # 系统相关
+                        if any(keyword in path_lower for keyword in [
+                            'system', 'windows', 'program files', 'appdata', 'users',
+                            'config', 'setting', 'preference', 'registry', 'backup'
+                        ]):
+                            tags.append("系统")
+                            if category == "其他":
+                                category = "系统文件"
+                        
+                        # 基于文件夹内容快速分析
+                        if os.path.exists(path) and os.path.isdir(path):
+                            try:
+                                items = os.listdir(path)[:10]  # 只看前10个文件
+                                extensions = set()
+                                
+                                for item in items:
+                                    if os.path.isfile(os.path.join(path, item)):
+                                        _, ext = os.path.splitext(item.lower())
+                                        if ext:
+                                            extensions.add(ext)
+                                
+                                # 代码文件
+                                if any(ext in extensions for ext in ['.py', '.js', '.java', '.cpp', '.c', '.cs']):
+                                    if "开发" not in tags:
+                                        tags.append("代码")
+                                        if category == "其他":
+                                            category = "开发项目"
+                                
+                                # 图片文件
+                                if any(ext in extensions for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']):
+                                    if "多媒体" not in tags:
+                                        tags.append("图片")
+                                        if category == "其他":
+                                            category = "多媒体文件"
+                                
+                                # 文档文件
+                                if any(ext in extensions for ext in ['.doc', '.docx', '.pdf', '.txt', '.rtf']):
+                                    if not any(tag in tags for tag in ["工作", "学习"]):
+                                        tags.append("文档")
+                                        if category == "其他":
+                                            category = "文档资料"
+                            
+                            except (PermissionError, OSError):
+                                pass
+                        
+                        # 基于访问频率
+                        if path in self.open_history:
+                            count = self.open_history[path]['count']
+                            if count >= 10:
+                                tags.append("常用")
+                            elif count >= 5:
+                                tags.append("经常")
+                        
+                        # 基于访问时间
+                        access_time = folder['access_time']
+                        now = datetime.now()
+                        days_diff = (now - access_time).days
+                        
+                        if days_diff == 0:
+                            tags.append("今日")
+                        elif days_diff <= 3:
+                            tags.append("最近")
+                        elif days_diff <= 7:
+                            tags.append("本周")
+                        
+                        # 生成注释
+                        if tags:
+                            self.folder_smart_tags[path] = tags
+                            auto_comment = f"[{category}] {' | '.join(tags)}"
+                            
+                            # 只在没有手动注释或已有自动注释时更新
+                            if (path not in self.folder_comments or 
+                                not self.folder_comments[path].strip() or 
+                                self.folder_comments[path].startswith('[')):
+                                self.folder_comments[path] = auto_comment
+                        
+                        self.folder_categories[path] = category
+                        processed_count += 1
+                        
+                    except Exception as e:
+                        print(f"处理文件夹 {path} 时出错: {e}")
+                        continue
+                
+                print(f"智能标签生成完成，处理了 {processed_count} 个文件夹")
+                
+                # 保存配置
+                self.save_config()
+                
+                # 在主线程中更新显示
+                self.root.after(0, self.update_folder_display)
+                
+            except Exception as e:
+                print(f"生成智能标签时出错: {e}")
+        
+        # 在后台线程中执行
+        threading.Thread(target=generate_in_thread, daemon=True).start()
+    
+    def auto_generate_comment(self):
+        """为选中的文件夹自动生成注释"""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showinfo("提示", "请先选择一个文件夹")
+            return
+        
+        item = selected_items[0]
+        path = self.tree.item(item, 'values')[0]
+        
+        # 为单个文件夹生成智能标签
+        def generate_single_tag():
+            tags = []
+            category = "其他"
+            
+            try:
+                path_lower = path.lower()
+                
+                # 简化的标签生成逻辑（复用上面的逻辑）
+                if any(keyword in path_lower for keyword in [
+                    'project', 'code', 'dev', 'src', 'source', 'github', 'programming'
+                ]):
+                    tags.append("开发")
+                    category = "开发项目"
+                
+                if any(keyword in path_lower for keyword in [
+                    'work', 'office', 'business', 'document', 'report'
+                ]):
+                    tags.append("工作")
+                    if category == "其他":
+                        category = "工作文档"
+                
+                if any(keyword in path_lower for keyword in [
+                    'study', 'learn', 'course', 'school', 'education'
+                ]):
+                    tags.append("学习")
+                    if category == "其他":
+                        category = "学习资料"
+                
+                if any(keyword in path_lower for keyword in [
+                    'photo', 'picture', 'image', 'video', 'music', 'media'
+                ]):
+                    tags.append("多媒体")
+                    if category == "其他":
+                        category = "多媒体文件"
+                
+                # 基于访问频率
+                if path in self.open_history:
+                    count = self.open_history[path]['count']
+                    if count >= 10:
+                        tags.append("常用")
+                    elif count >= 5:
+                        tags.append("经常")
+                
+                if not tags:
+                    tags.append("普通")
+                
+                auto_comment = f"[{category}] {' | '.join(tags)}"
+                self.folder_comments[path] = auto_comment
+                
+                # 保存并更新显示
+                self.save_config()
+                self.update_folder_display()
+                
+                messagebox.showinfo("完成", f"已为文件夹生成智能注释:\n{auto_comment}")
+                
+            except Exception as e:
+                messagebox.showerror("错误", f"生成注释失败: {str(e)}")
+        
+        generate_single_tag()
+    
+    def regenerate_all_smart_tags(self):
+        """重新生成所有智能标签"""
+        if not hasattr(self, 'folders_data') or not self.folders_data:
+            messagebox.showinfo("提示", "没有文件夹数据可处理")
+            return
+        
+        result = messagebox.askyesno(
+            "确认操作", 
+            "这将重新生成所有自动注释（以 [ 开头的注释），\n手动添加的注释不会被影响。\n\n确定继续吗？"
+        )
+        
+        if not result:
+            return
+        
+        # 清空现有的自动生成注释
+        auto_paths = []
+        for path, comment in self.folder_comments.items():
+            if comment.startswith('['):
+                auto_paths.append(path)
+        
+        for path in auto_paths:
+            del self.folder_comments[path]
+        
+        # 清空智能标签和分类
+        self.folder_smart_tags.clear()
+        self.folder_categories.clear()
+        
+        # 重新生成
+        self._generate_smart_tags_async()
+        
+        messagebox.showinfo("开始处理", "正在后台重新生成智能标签，请稍等...")
 
 
 def main():
