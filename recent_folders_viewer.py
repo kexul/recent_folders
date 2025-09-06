@@ -174,6 +174,13 @@ class RecentFoldersViewer:
         self.root.bind('<Control-F>', self.focus_to_search)  # 大小写都支持
         self.root.bind('<Escape>', self.hide_to_tray)  # ESC键隐藏到托盘
         
+        # 绑定左右方向键切换两栏焦点（绑定到具体控件而不是全局）
+        self.tree.bind('<Right>', self.on_tree_right_key)
+        self.file_tree.bind('<Left>', self.on_file_tree_left_key)
+        
+        # 存储当前焦点状态
+        self.current_panel = 'left'  # 'left' 或 'right'
+        
         # 绑定窗口事件
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)  # 关闭按钮隐藏到托盘
         self.root.bind('<Unmap>', self.on_window_minimize)  # 最小化事件
@@ -1365,6 +1372,43 @@ class RecentFoldersViewer:
     def refresh_folders(self):
         """刷新文件夹列表"""
         self.load_recent_folders()
+    
+    def on_tree_right_key(self, event):
+        """在左侧列表中按下右方向键时切换到右侧面板"""
+        # 阻止默认的右方向键行为（可能会触发其他事件）
+        
+        # 设置当前面板为右侧
+        self.current_panel = 'right'
+        
+        # 将焦点设置到右侧的文件列表
+        self.file_tree.focus_set()
+        
+        # 如果右侧列表有项目但没有选中项，选中第一个
+        if self.file_tree.get_children() and not self.file_tree.selection():
+            first_item = self.file_tree.get_children()[0]
+            self.file_tree.selection_set(first_item)
+            self.file_tree.focus(first_item)
+        
+        return 'break'  # 阻止默认行为和事件传播
+    
+    def on_file_tree_left_key(self, event):
+        """在右侧列表中按下左方向键时切换到左侧面板"""
+        # 设置当前面板为左侧
+        self.current_panel = 'left'
+        
+        # 清除右侧列表的选中状态
+        self.file_tree.selection_remove(self.file_tree.selection())
+        
+        # 将焦点设置到左侧的文件夹列表
+        self.tree.focus_set()
+        
+        # 如果左侧列表有项目但没有选中项，选中第一个
+        if self.tree.get_children() and not self.tree.selection():
+            first_item = self.tree.get_children()[0]
+            self.tree.selection_set(first_item)
+            self.tree.focus(first_item)
+        
+        return 'break'  # 阻止默认行为和事件传播
 
 
 def main():
